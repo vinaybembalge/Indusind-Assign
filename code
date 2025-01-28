@@ -1,0 +1,107 @@
+import os
+import xml.etree.ElementTree as ET
+import pandas as pd
+
+# Define the mapping for DPD codes
+DPD_MAPPING = {
+    "XXX": 0,
+    "STD": 0,
+    "SUB": 91,
+    "DBT": 151,
+    "LSS": 181,
+    "SMA": 61,
+    "DDD": 0
+}
+
+def parse_payment_history(payment_history):
+    """
+    Parse the combined payment history and return a list of DPD values for each month.
+    """
+    dpd_values = []
+    if payment_history:
+        entries = payment_history.split('|')
+        for entry in entries:
+            if entry.strip():
+                try:
+                    _, dpd_code = entry.split(',')
+                    dpd_value = DPD_MAPPING.get(dpd_code.split('/')[0], 0)
+                    dpd_values.append(dpd_value)
+                except ValueError:
+                    continue
+    return dpd_values
+
+def process_customer_file(file_path):
+    """
+    Process a single XML file and calculate the required statistics for the customer.
+    """
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+    except ET.ParseError as e:
+        print(f"Error parsing file {file_path}: {e}")
+        return None
+
+    total_trades = 0
+    trades_with_30plus_dpd = 0
+    total_disbursed_amount = 0
+    max_30plus_dpd_months = 0
+
+    for loan_details in root.findall('.//LOAN-DETAILS'):
+        total_trades += 1
+
+        # Calculate disbursed amount
+        disbursed_amount_elem = loan_details.find('DISBURSED-AMT')
+        disbursed_amount = 0
+        if disbursed_amount_elem is not None and disbursed_amount_elem.text:
+            try:
+                disbursed_amount = int(disbursed_amount_elem.text.replace(',', ''))
+            except ValueError:
+                print(f"Invalid DISBURSED-AMT value in file {file_path}")
+        total_disbursed_amount += disbursed_amount
+
+        # Calculate DPD statistics
+        payment_history_elem = loan_details.find('COMBINED-PAYMENT-HISTORY')
+        dpd_values = []
+        if payment_history_elem is not None and payment_history_elem.text:
+            dpd_values = parse_payment_history(payment_history_elem.text)
+
+        # Count trades with 30+ DPD and find the maximum number of months with 30+ DPD
+        months_with_30plus_dpd = sum(1 for dpd in dpd_values if dpd > 30)
+        if months_with_30plus_dpd > 0:
+            trades_with_30plus_dpd += 1
+        max_30plus_dpd_months = max(max_30plus_dpd_months, months_with_30plus_dpd)
+
+    trades_30plus_dpd_percentage = (trades_with_30plus_dpd / total_trades) * 100 if total_trades > 0 else 0
+
+    return {
+        "Total Trades": total_trades,
+        "Percentage of Trades with 30+ DPD": trades_30plus_dpd_percentage,
+        "Total Disbursed Amount": total_disbursed_amount,
+        "Max Months with 30+ DPD": max_30plus_dpd_months
+    }
+
+def process_all_customers(directory):
+    """
+    Process all customer XML files in a directory and generate a summary report.
+    """
+    results = []
+    for file_name in os.listdir(directory):
+        if file_name.endswith('.xml'):
+            file_path = os.path.join(directory, file_name)
+            customer_id = os.path.splitext(file_name)[0]
+            customer_data = process_customer_file(file_path)
+            if customer_data:
+                customer_data["Customer ID"] = customer_id
+                results.append(customer_data)
+
+    return pd.DataFrame(results)
+
+# Directory containing the XML files
+directory_path = "path/to/xml/files"
+
+# Process all customers and save the results to a CSV file
+df = process_all_customers(directory_path)
+output_file = "customer_report.csv"
+df.to_csv(output_file, index=False)
+
+print(f"Report
